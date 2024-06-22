@@ -11,7 +11,7 @@ from .preprocess import gpd_fromlist
 
 UNIVERSAL_CRS = 'EPSG:3857'
 
-def sq_tessellate(base_shape, meters):
+def sq_tessellate(base_shape, meters, project_on_crs = None):
     """
     Function to tessellate a base shape into square polygons.
 
@@ -26,7 +26,10 @@ def sq_tessellate(base_shape, meters):
         The tessellated polygons as a GeoDataFrame.
     """
     
-    shape = base_shape.to_crs(UNIVERSAL_CRS).unary_union
+    if project_on_crs is None:
+        project_on_crs = UNIVERSAL_CRS
+        
+    shape = base_shape.to_crs(project_on_crs).unary_union
 
     min_x, min_y, max_x, max_y = shape.bounds
 
@@ -47,7 +50,7 @@ def sq_tessellate(base_shape, meters):
             if shape.intersects(polygon):
                 polygons.append({"geometry": polygon})
 
-    return gpd_fromlist(polygons, crs=UNIVERSAL_CRS).to_crs(base_shape.crs)
+    return geopandas.GeoDataFrame(polygons, crs=project_on_crs).to_crs(base_shape.crs)
 
 def h3_tessellate(base_shape, resolution, within = False):
     """
@@ -85,9 +88,9 @@ def h3_tessellate(base_shape, resolution, within = False):
     polygons = [{"geometry" : shapely.geometry.Polygon(h3.h3_to_geo_boundary(h3_index, geo_json=True)),
                  'h3-id' : 'h3_'+str(h3_index)} for h3_index in sorted(h3_indexes)]
     
-    return gpd_fromlist(polygons, crs=base_shape.crs)
+    return geopandas.GeoDataFrame(polygons, crs=base_shape.crs)
 
-def tri_tessellate(base_shape):
+def tri_tessellate(base_shape, project_on_crs = None):
     """
     Tessellates a base shape into triangles. 
     Triangles may be used to process irregular polygons using properties of regular polygons.
@@ -100,14 +103,15 @@ def tri_tessellate(base_shape):
     - geopandas.GeoDataFrame
         The tessellated triangles as a GeoDataFrame.
     """
-    
-    
-    shape = base_shape.to_crs(UNIVERSAL_CRS).unary_union
+    if project_on_crs is None:
+        project_on_crs = UNIVERSAL_CRS
+        
+    shape = base_shape.to_crs(project_on_crs).unary_union
     triangles = shapely.ops.triangulate(shape)
-    triangles_gdf = gpd_fromlist(triangles, crs = UNIVERSAL_CRS)
+    triangles_gdf = gpd_fromlist(triangles, crs = project_on_crs)
     
-    centroid_gdf = geopandas.GeoDataFrame(geometry = triangles_gdf.centroid, crs = UNIVERSAL_CRS)\
-                            .sjoin(       gpd_fromlist([shape], crs = UNIVERSAL_CRS), 
+    centroid_gdf = geopandas.GeoDataFrame(geometry = triangles_gdf.centroid, crs = project_on_crs)\
+                            .sjoin(       gpd_fromlist([shape], crs = project_on_crs), 
                                           how = 'inner', predicate = 'within'
                                     )
     
