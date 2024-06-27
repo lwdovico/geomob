@@ -1,6 +1,9 @@
+import pandas
 import geopandas
 import shapely
 import haversine
+
+UNIVERSAL_CRS = 'EPSG:3857'
 
 def create_geometry(geom):
     """
@@ -69,35 +72,32 @@ def stop_detection(llt_df, stop_radius, stop_seconds, no_data_seconds):
     df['speed'] = (df['delta_space'] / df['delta_time'] * 3600).replace(float('inf'), 0) # in km/h, in case of no delta_time it returns 0 km/h (assuming no movement)
 
     stop_ids = [0]
-    waiting_time = 0
+    waiting_time = 1
     
     for i in range(1, len(df)): 
         lat, lng, t = df.iloc[i][['lat', 'lng', 'timestamp']].values
         lat_stop, lng_stop, t_stop = df.iloc[stop_ids[-1]][['lat', 'lng', 'timestamp']].values
         
         if (t - t_stop) > no_data_seconds:
-            stop_ids.extend(range(stop_ids[-1] + 1, i + 1))
-            waiting_time = 0
+            stop_ids.extend(range(stop_ids[-1] + 1, stop_ids[-1]  + waiting_time + 1))
+            waiting_time = 1
             continue
         
-        space_condition = haversine([lat, lng], [lat_stop, lng_stop]) < stop_radius
+        space_condition = haversine.haversine([lat, lng], [lat_stop, lng_stop]) < stop_radius
         time_condition = (t - t_stop) > stop_seconds
         
         if space_condition and time_condition:
-            if waiting_time == 0:
-                stop_ids.append(stop_ids[-1])
-            else:
-                stop_ids.extend([stop_ids[-1]]*waiting_time)
+            stop_ids.extend([stop_ids[-1]]*waiting_time)
+            waiting_time = 1
                 
         elif space_condition:
             waiting_time += 1
         
         else:
-            stop_ids.extend(range(stop_ids[-1] + 1, i + 1))
-            waiting_time = 0
+            stop_ids.extend(range(stop_ids[-1] + 1, stop_ids[-1] + waiting_time + 1))
+            waiting_time = 1
             
-    if waiting_time > 0:
-        stop_ids.extend([stop_ids[-1]]*waiting_time)
+    stop_ids.extend([stop_ids[-1]]*(waiting_time - 1))
         
     df['stop_id'] = stop_ids
     
@@ -105,6 +105,12 @@ def stop_detection(llt_df, stop_radius, stop_seconds, no_data_seconds):
                                                                 stop_lng = ('lng', 'mean'), 
                                                                 arrival_time = ('timestamp', 'first'),
                                                                 leaving_time = ('next_timestamp', 'last'))).reset_index()
-    df['leaving_time'] = df['leaving_time'].astype(int)
     
     return df
+
+def timestamp_to_timezone(timestamp, pytz_timezone):
+    return pandas.Timestamp(timestamp, unit='s', tz=pytz_timezone)
+
+def home_catchement(stop_df, timezone, start_night = 22, end_night = 7, home_radius = None):
+    stop_df = stop_df.sort_values('arrival_time').reset_index(drop=True)
+    return
