@@ -41,7 +41,7 @@ def gpd_fromlist(geometries, crs = 'EPSG:4326'):
     
     return gdf
 
-def stop_detection(llt_df, stop_radius, stop_seconds, no_data_seconds):
+def stop_detection(llt_df, stop_radius, stop_seconds, no_data_seconds, max_speed = None):
     """
     Detect stops in a trajectory based on given parameters.
 
@@ -69,14 +69,16 @@ def stop_detection(llt_df, stop_radius, stop_seconds, no_data_seconds):
     
     df['delta_time'] = (df['next_timestamp'] - df['timestamp'])
     
-    df['speed'] = (df['delta_space'] / df['delta_time'] * 3600).replace(float('inf'), 0) # in km/h, in case of no delta_time it returns 0 km/h (assuming no movement)
+    # in km/h, in case of no delta_time it returns 0 km/h (assuming no movement)
+    df['speed'] = (df['delta_space'] / df['delta_time'] * 3600).replace(float('inf'), 0)
 
     stop_ids = [0]
     waiting_time = 1
+    latlngt = df[['lat', 'lng', 'timestamp']].values
     
     for i in range(1, len(df)): 
-        lat, lng, t = df.iloc[i][['lat', 'lng', 'timestamp']].values
-        lat_stop, lng_stop, t_stop = df.iloc[stop_ids[-1]][['lat', 'lng', 'timestamp']].values
+        lat, lng, t = latlngt[i]
+        lat_stop, lng_stop, t_stop = latlngt[stop_ids[-1]]
         
         if (t - t_stop) > no_data_seconds:
             stop_ids.extend(range(stop_ids[-1] + 1, stop_ids[-1]  + waiting_time + 1))
@@ -106,11 +108,67 @@ def stop_detection(llt_df, stop_radius, stop_seconds, no_data_seconds):
                                                                 arrival_time = ('timestamp', 'first'),
                                                                 leaving_time = ('next_timestamp', 'last'))).reset_index()
     
+    agg_by_stop = df.assign(pings = 1).groupby('stop_id').agg({'delta_time' : 'sum', 'pings' : 'count'})
+    df['stop_duration'] = df['stop_id'].map(agg_by_stop['delta_time'].to_dict())
+    df['pings'] = df['stop_id'].map(agg_by_stop['pings'].to_dict())
+    if max_speed is not None:
+        df['is_stop'] = (df['stop_duration'] > stop_seconds) & (df['speed'] < max_speed)
+    else:
+        df['is_stop'] = df['stop_duration'] > stop_seconds
+    df.loc[~df['is_stop'], 'pings'] = 0
+    
     return df
 
-def timestamp_to_timezone(timestamp, pytz_timezone):
-    return pandas.Timestamp(timestamp, unit='s', tz=pytz_timezone)
+def home_catchement(stop_df, timezone, start_night = '22:00', end_night = '07:00', method = 'most_frequent', home_radius = None):
+    """
+    Calculate the home catchment area based on stop data.
 
-def home_catchement(stop_df, timezone, start_night = 22, end_night = 7, home_radius = None):
-    stop_df = stop_df.sort_values('arrival_time').reset_index(drop=True)
-    return
+    Args:
+        stop_df (pandas.DataFrame): DataFrame containing stop data.
+        timezone (str): Timezone of the stop data.
+        start_night (str, optional): Start time of the night period. Defaults to '22:00'.
+        end_night (str, optional): End time of the night period. Defaults to '07:00'.
+        method (str, optional): Method for ranking home locations. 
+                                Options are 'most_frequent', 'most_certain', and 'longest'. Defaults to 'most_frequent'.
+        home_radius (float, optional): Radius for creating home cluster. 
+                                       Keep it low, since it joins stops based on overlapping areas starting from the radius. 
+                                       Defaults to None.
+
+    Returns:
+        pandas.DataFrame: DataFrame containing the ranking of home locations based on the specified method.
+            Columns:
+                - stop_lat: Latitude of the home location.
+                - stop_lng: Longitude of the home location.
+                - most_frequent: Number of unique stop IDs in the home location.
+                - most_certain: Total number of stop IDs in the home location.
+                - longest: Sum of stop durations in the home location.
+    """
+    
+    stops = stop_df[stop_df['is_stop']].dropna(subset = 'timestamp').sort_values(by='timestamp')
+
+    if home_radius is not None:
+        points = stops.apply(lambda r: shapely.geometry.Point(r['stop_lng'], r['stop_lat']), axis=1)
+        stops = geopandas.GeoDataFrame(stops, geometry = points, crs = 'EPSG:4326')
+        
+        stop_clusters = stops.to_crs(UNIVERSAL_CRS).buffer(home_radius).to_crs('EPSG:4326').reset_index(name = 'geometry')\
+                             .dissolve().reset_index()[['geometry']].explode(index_parts = False).reset_index(drop = True)
+        stops = stops.sjoin(stop_clusters, how = 'left', predicate = 'within').rename(columns = {'index_right' : 'cluster_id'})
+        stops = stops.set_index('cluster_id').drop(['stop_lat', 'stop_lng'], axis = 1)\
+                     .join(stops.groupby('cluster_id').agg({'stop_lat' : 'mean', 'stop_lng' : 'mean'})).reset_index()
+                     
+    night_stops = stops['timestamp'].apply(lambda t: pandas.Timestamp(t, unit='s', tz=timezone))
+    
+    if len(night_stops) == 0:
+        return pandas.DataFrame(columns = ['stop_lat', 'stop_lng', 'most_frequent', 'most_certain', 'longest'])
+    
+    night_stop_id = stops.set_index(pandas.DatetimeIndex(night_stops)).between_time(start_night, end_night)['stop_id'].values
+        
+    night_visits = stops[stops['stop_id'].isin(night_stop_id)]
+    
+    home_ranking = night_visits .groupby(['stop_lat', 'stop_lng'])\
+                                .agg(most_frequent  = ('stop_id', 'nunique'), 
+                                     most_certain   = ('stop_id', 'count'), 
+                                     longest        = ('stop_duration', 'sum'))\
+                                .sort_values(by = method, ascending = False)
+
+    return home_ranking
