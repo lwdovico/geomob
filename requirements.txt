@@ -1,0 +1,9 @@
+geopandas==0.14.4
+h3==3.7.7
+haversine==2.8.1
+keplergl==0.3.2
+numpy==2.0.0
+pandas==2.2.2
+Pytess==1.0.0
+requests==2.32.3
+shapely==2.0.4
