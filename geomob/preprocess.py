@@ -42,7 +42,7 @@ def gpd_fromlist(geometries, crs = 'EPSG:4326'):
     
     return gdf
 
-def trajectory_detection(llt_df, stop_radius, stop_seconds, no_data_seconds):
+def trajectory_detection(df, stop_radius, stop_seconds, no_data_seconds):
     """
     Enrich the events of a user with trajectory stats based on a given set of stop parameters.
 
@@ -78,7 +78,7 @@ def trajectory_detection(llt_df, stop_radius, stop_seconds, no_data_seconds):
         - is_stop (bool): Indicates whether the trajectory is considered a stop or not on the set conditions.
     """
     
-    df = llt_df.sort_values('timestamp').reset_index(drop=True)
+    df = df.sort_values('timestamp').reset_index(drop=True)
     df['lat'] = df['lat'].astype(float)
     df['lng'] = df['lng'].astype(float)
     df['timestamp'] = df['timestamp'].astype(int)
@@ -150,20 +150,54 @@ def trajectory_detection(llt_df, stop_radius, stop_seconds, no_data_seconds):
     
     return df
 
-def filter_blocks(df, filter_id, **kwargs):
+def select_blocks(df, filter_id, **kwargs):
     """
     Helper function to filter out strange blocks of data.
     """
     min_radius = kwargs.get('min_radius', None)
     min_radius_condition = df.assign(filtering = True)['filtering']
     
+    integrity_speed = kwargs.get('integrity_speed', None)
+    sequence_integrity_condition = df.assign(filtering = True)['filtering']
+    
     if min_radius is not None:
         min_radius_apply = lambda x: numpy.max(haversine.haversine_vector(x[['lat', 'lng']].values, 
                                                                           x[['lat', 'lng']].values, comb=True)) > min_radius
         
         min_radius_condition = df[filter_id].map(df.groupby(filter_id).apply(min_radius_apply, include_groups=False).to_dict())
+        
+    if integrity_speed is not None:
+        seq_aggregated = df.groupby(filter_id).agg( depart_time = ('timestamp', 'first'),
+                                                    dest_time = ('timestamp', 'last'),
+                                                    depart_lat = ('lat', 'first'),
+                                                    dest_lat = ('lat', 'last'),
+                                                    depart_lng = ('lng', 'first'),
+                                                    dest_lng = ('lng', 'last'))
+        
+        seq_aggregated['integrity_speed'] = False
+        
+        # remove sequentially blocks of points that do not meet the integrity speed
+        
+        while ~(seq_aggregated['integrity_speed'].all()):
+            seq_aggregated['prev_dest_lat'] = seq_aggregated['dest_lat'].shift(1)
+            seq_aggregated['prev_dest_lng'] = seq_aggregated['dest_lng'].shift(1)
+            
+            seq_aggregated['distance_from_previous_seq'] = seq_aggregated.apply(lambda r: haversine.haversine((r['depart_lat'], r['depart_lng']),
+                                                                                                            (r['prev_dest_lat'], r['prev_dest_lng'])), axis=1)
+            
+            seq_aggregated['time_from_previous_seq'] = seq_aggregated['depart_time'] - seq_aggregated['dest_time'].shift(1)
+            
+            seq_aggregated['speed_from_previous_seq'] = (seq_aggregated['distance_from_previous_seq'] / seq_aggregated['time_from_previous_seq'] * 3600).fillna(0)
+            seq_aggregated['integrity_speed'] = seq_aggregated['speed_from_previous_seq'] < integrity_speed
+            
+            problematic_od = seq_aggregated[~seq_aggregated['integrity_speed']].index
+            
+            if len(problematic_od) > 0:
+                seq_aggregated.drop(problematic_od[0], inplace = True)
+                
+        sequence_integrity_condition = df[filter_id].isin(seq_aggregated.index)
     
-    filtering = min_radius_condition
+    filtering = min_radius_condition & sequence_integrity_condition
     
     return filtering
 
@@ -178,8 +212,8 @@ def stop_detection(df, max_speed = None):
     Returns:
         pandas.DataFrame: DataFrame containing the detected stops.
             Columns:
-                - traj_id: Identifier of the trajectory.
                 - stop_id: Identifier of the stop.
+                - traj_id: Identifier of the trajectory.
                 - mean_lat: Mean latitude of the stop.
                 - mean_lng: Mean longitude of the stop.
                 - arrival_time: Timestamp of the first point of the stop.
@@ -204,105 +238,7 @@ def stop_detection(df, max_speed = None):
                                      .reset_index(names = 'stop_id')
     
     return stop_df
-
-def sequence_integrity(df, index = 'trip_id', integrity_speed = 250):
-    """
-    Clean sequence of points based on the integrity speed.
     
-    Args:
-        df (pandas.DataFrame): DataFrame containing data points with timestamp, lat and lng.
-        integrity_speed (float): The minimum speed to consider an OD as valid.
-    
-    Returns:
-        pandas.Index: Index of the valid ODs.
-    
-    """
-    seq_aggregated = df.groupby(index).agg( depart_time = ('timestamp', 'first'),
-                                            dest_time = ('timestamp', 'last'),
-                                            depart_lat = ('lat', 'first'),
-                                            dest_lat = ('lat', 'last'),
-                                            depart_lng = ('lng', 'first'),
-                                            dest_lng = ('lng', 'last'))
-    
-    seq_aggregated['integrity_speed'] = False
-    
-    # remove sequentially blocks of points that do not meet the integrity speed
-    
-    while ~(seq_aggregated['integrity_speed'].all()):
-        seq_aggregated['prev_dest_lat'] = seq_aggregated['dest_lat'].shift(1)
-        seq_aggregated['prev_dest_lng'] = seq_aggregated['dest_lng'].shift(1)
-        
-        seq_aggregated['distance_from_previous_seq'] = seq_aggregated.apply(lambda r: haversine.haversine((r['depart_lat'], r['depart_lng']),
-                                                                                                          (r['prev_dest_lat'], r['prev_dest_lng'])), axis=1)
-        
-        seq_aggregated['time_from_previous_seq'] = seq_aggregated['depart_time'] - seq_aggregated['dest_time'].shift(1)
-        
-        seq_aggregated['speed_from_previous_seq'] = (seq_aggregated['distance_from_previous_seq'] / seq_aggregated['time_from_previous_seq'] * 3600).fillna(0)
-        seq_aggregated['integrity_speed'] = seq_aggregated['speed_from_previous_seq'] < integrity_speed
-        
-        problematic_od = seq_aggregated[~seq_aggregated['integrity_speed']].index
-        
-        if len(problematic_od) > 0:
-            seq_aggregated.drop(problematic_od[0], inplace = True)
-        
-    return seq_aggregated.index
-    
-def trip_detection(df, integrity_speed = 250, 
-                       integrity_space = 100,
-                       integrity_time = 60*60,
-                       min_max_distance = None,
-                       min_pings_in_trip = None,
-                       return_one_exec = False):
-    """
-    Detect trips in a DataFrame based on the 'is_stop' column and the minimum and maximum duration thresholds.
-
-    Args:
-        df (pandas.DataFrame): DataFrame containing trajectory data.
-        min_max_distance(float, optional): The minimum maximum distance of a pair of points to define a trip, in kilometers. Defaults to None.
-        
-    """
-    df = df[['lat', 'lng', 'timestamp', 'delta_space', 'delta_time', 'speed', 'is_stop', 'pings_in_traj']].sort_values('timestamp').reset_index(drop=True)
-    
-    df['break_point'] = (df['speed'] > integrity_speed) | (df['delta_space'] > integrity_space) | (df['delta_time'] > integrity_time)
-    
-    df['consider_trip'] = ~df['is_stop'] & ~df['break_point']
-    
-    df.insert(0, 'trip_id', (df['consider_trip'] & (~df['consider_trip'].shift(fill_value=False))).cumsum())
-    df['trip_id'] += df['break_point'].cumsum()
-    
-    trip_df = df[df['consider_trip']].copy(deep = True)
-    
-    if min_max_distance is not None:
-        trip_df['consider_trip_distance'] = filter_blocks(trip_df, filter_id = 'trip_id', min_radius = min_max_distance)
-        trip_df = trip_df[trip_df['consider_trip_distance']].copy(deep = True)
-    
-    trip_df['pings_in_traj'] = trip_df['trip_id'].map(trip_df.groupby('trip_id')['pings_in_traj'].sum().to_dict())
-    
-    if min_pings_in_trip is not None:
-        trip_df['consider_trip_pings'] = trip_df['pings_in_traj'] > min_pings_in_trip
-        trip_df = trip_df[trip_df['consider_trip_pings']].copy(deep = True)
-    
-    integ_trips = sequence_integrity(trip_df, index = 'trip_id', integrity_speed = integrity_speed)
-    trip_df_wattr = trip_df.set_index('trip_id').loc[integ_trips].reset_index()
-    
-    trip_df_wattr['next_lat'] = trip_df_wattr['lat'].shift(-1)
-    trip_df_wattr['next_lng'] = trip_df_wattr['lng'].shift(-1)
-    trip_df_wattr['delta_space'] = trip_df_wattr.apply(lambda r: haversine.haversine((r['lat'], r['lng']),
-                                                                                     (r['next_lat'], r['next_lng'])), axis=1)
-    trip_df_wattr['next_timestamp'] = trip_df_wattr['timestamp'].shift(-1)
-    trip_df_wattr['delta_time'] = trip_df_wattr['next_timestamp'] - trip_df_wattr['timestamp']
-    trip_df_wattr['speed'] = trip_df_wattr['delta_space'] / trip_df_wattr['delta_time'] * 3600
-    trip_df_wattr['is_stop'] = False
-    
-    trip_cols = ['trip_id', 'lat', 'lng', 'timestamp',  'delta_space', 'delta_time', 'speed', 'is_stop', 'pings_in_traj']
-    
-    trip_res = trip_df_wattr[trip_cols]
-    
-    if return_one_exec:
-        return trip_res
-    
-    return trip_detection(trip_res, integrity_speed = integrity_speed, integrity_space = integrity_space, integrity_time = integrity_time, return_one_exec = True)
-
 def cluster_stops(stop_df, method = 'radius', radius = 0.150):
     """
     Helper function to cluster stops.
@@ -372,3 +308,100 @@ def location_ranking(stop_df, timezone, start_window = '19:00', end_window = '07
                                 .reset_index()
 
     return loc_ranking.reset_index(names = 'ranking')
+
+def trip_detection(df, integrity_speed = 250, 
+                       integrity_space = 100,
+                       integrity_time = 60*60,
+                       min_max_distance = None,
+                       min_pings_in_trip = None,
+                       return_one_exec = False):
+    """
+    Detect trips in after the trajectory detection.
+    
+    Args:
+        df (pandas.DataFrame): DataFrame containing trajectory data.
+        integrity_speed (float): Maximum speed threshold in km/h. Defaults to 250.
+        integrity_space (float): Maximum space threshold in km. Defaults to 100.
+        integrity_time (float): Maximum time threshold in seconds. Defaults to 1 hour (3600).
+        min_max_distance (float, optional): Minimum distance threshold in km. Defaults to None.
+        min_pings_in_trip (int, optional): Minimum number of pings in a trip. Defaults to None.
+        return_one_exec (bool, optional): Return the result of the first execution. Defaults to False.
+                                          The first execution returns segments of trajectories that are considered trips.
+                                          The second execution returns the final trips.
+        
+    """
+    df = df[['traj_id', 'lat', 'lng', 'timestamp', 'delta_space', 'delta_time', 'speed', 'is_stop', 'pings_in_traj']].sort_values('timestamp').reset_index(drop=True)
+    
+    df['break_point'] = (df['speed'] > integrity_speed) | (df['delta_space'] > integrity_space) | (df['delta_time'] > integrity_time)
+    
+    df['consider_trip'] = ~df['is_stop'] & ~df['break_point']
+    
+    df.insert(0, 'trip_id', (df['consider_trip'] & (~df['consider_trip'].shift(fill_value=False))).cumsum())
+    df['trip_id'] += df['break_point'].cumsum()
+    
+    trip_df = df[df['consider_trip']].copy(deep = True)
+    
+    if min_max_distance is not None:
+        trip_df['consider_trip_distance'] = select_blocks(trip_df, filter_id = 'trip_id', min_radius = min_max_distance)
+        trip_df = trip_df[trip_df['consider_trip_distance']].copy(deep = True)
+    
+    trip_df['pings_in_traj'] = trip_df['trip_id'].map(trip_df.groupby('trip_id').count()['pings_in_traj'].to_dict())
+    
+    if min_pings_in_trip is not None:
+        trip_df['consider_trip_pings'] = trip_df['pings_in_traj'] > min_pings_in_trip
+        trip_df = trip_df[trip_df['consider_trip_pings']].copy(deep = True)
+    
+    trip_df['integrated_trips'] = select_blocks(trip_df, filter_id = 'trip_id', integrity_speed = integrity_speed)
+    trip_df_wattr = trip_df.loc[trip_df['integrated_trips']].reset_index()
+    
+    trip_df_wattr['next_lat'] = trip_df_wattr['lat'].shift(-1)
+    trip_df_wattr['next_lng'] = trip_df_wattr['lng'].shift(-1)
+    trip_df_wattr['delta_space'] = trip_df_wattr.apply(lambda r: haversine.haversine((r['lat'], r['lng']),
+                                                                                     (r['next_lat'], r['next_lng'])), axis=1)
+    trip_df_wattr['next_timestamp'] = trip_df_wattr['timestamp'].shift(-1)
+    trip_df_wattr['delta_time'] = trip_df_wattr['next_timestamp'] - trip_df_wattr['timestamp']
+    trip_df_wattr['speed'] = trip_df_wattr['delta_space'] / trip_df_wattr['delta_time'] * 3600
+    trip_df_wattr['is_stop'] = False
+    
+    trip_cols = ['trip_id', 'traj_id', 'lat', 'lng', 'timestamp',  'delta_space', 'delta_time', 'speed', 'is_stop', 'pings_in_traj']
+    
+    trip_res = trip_df_wattr[trip_cols]
+    
+    if return_one_exec:
+        return trip_res
+    
+    return trip_detection(trip_res, integrity_speed = integrity_speed, 
+                                    integrity_space = integrity_space, 
+                                    integrity_time = integrity_time, 
+                                    min_max_distance = min_max_distance, 
+                                    min_pings_in_trip = min_pings_in_trip, 
+                                    return_one_exec = True)
+    
+def trip_compression(trip_df, return_geometry = False, list_speed = True):
+    aggregating_info = {'depart_time' : ('timestamp', 'first'),
+                        'dest_time' : ('timestamp', 'last'),
+                        'depart_lat' : ('lat', 'first'),
+                        'dest_lat' : ('lat', 'last'),
+                        'depart_lng' : ('lng', 'first'),
+                        'dest_lng' : ('lng', 'last'),
+                        'trip_points' : ('pings_in_traj', 'count'),
+                        'trip_duration' : ('delta_time', lambda x: int(x[:-1].sum())),
+                        'trip_distance' : ('delta_space', lambda x: x[:-1].sum())}
+
+    if return_geometry:
+        aggregating_info.update({'lat_sequence' : ('lat', list),
+                                 'lng_sequence' : ('lng', list)})
+    if list_speed:
+        aggregating_info.update({'speed_sequence' : ('speed', list)})
+    else:
+        aggregating_info.update({'max_speed' : ('speed', 'max'),
+                                 'mean_speed' : ('speed', 'mean'),
+                                 'min_speed' : ('speed', 'min')})
+
+    compressed_trip = trip_df.groupby('trip_id').agg(**aggregating_info)
+
+    if return_geometry:
+        compressed_trip['geometry'] = compressed_trip.apply(lambda r: shapely.geometry.LineString(zip(r['lng_sequence'], r['lat_sequence'])), axis=1)
+        compressed_trip.drop(['lat_sequence', 'lng_sequence'], axis=1, inplace=True)
+
+    return compressed_trip
