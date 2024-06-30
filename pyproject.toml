@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "geomob"
+dynamic = ["version"]
+description = "Geospatial and mobility data library"
+readme = "README.md"
+license = ""
+authors = [
+    { name = "Ludovico Lemma", email = "lwdovico@protonmail.com" },
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+]
+dependencies = [
+    "geopandas==0.14.4",
+    "h3==3.7.7",
+    "haversine==2.8.1",
+    "keplergl==0.3.2",
+    "numpy==2.0.0",
+    "pandas==2.2.2",
+    "Pytess==1.0.0",
+    "requests==2.32.3",
+    "shapely==2.0.4",
+]
+
+[project.urls]
+Homepage = "https://github.com/lwdovico/geomob"
+
+[tool.hatch.version]
+path = "geomob/__init__.py"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/geomob",
+]
