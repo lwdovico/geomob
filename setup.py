@@ -8,7 +8,7 @@ with open("README.md", "r") as readmefile:
 
 setup(
     name = "geomob",
-    version = '0.0.1',
+    version = '0.0.2',
     author = "Ludovico Lemma",
     author_email = "ludovico.lemma@mindearth.ch",
     description = "Geospatial and mobility data library",

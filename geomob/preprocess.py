@@ -205,47 +205,47 @@ def stop_detection(df, max_speed = None):
     
     return stop_df
 
-def clean_od(df, integrity_speed = 250):
+def sequence_integrity(df, index = 'trip_id', integrity_speed = 250):
     """
-    Clean ODs based on the integrity speed.
+    Clean sequence of points based on the integrity speed.
     
     Args:
-        df (pandas.DataFrame): DataFrame containing OD data with timestamp, lat and lng.
+        df (pandas.DataFrame): DataFrame containing data points with timestamp, lat and lng.
         integrity_speed (float): The minimum speed to consider an OD as valid.
     
     Returns:
         pandas.Index: Index of the valid ODs.
     
     """
-    od_aggregated = df.groupby('trip_id').agg(  depart_time = ('timestamp', 'first'),
-                                                dest_time = ('timestamp', 'last'),
-                                                depart_lat = ('lat', 'first'),
-                                                dest_lat = ('lat', 'last'),
-                                                depart_lng = ('lng', 'first'),
-                                                dest_lng = ('lng', 'last'))
+    seq_aggregated = df.groupby(index).agg( depart_time = ('timestamp', 'first'),
+                                            dest_time = ('timestamp', 'last'),
+                                            depart_lat = ('lat', 'first'),
+                                            dest_lat = ('lat', 'last'),
+                                            depart_lng = ('lng', 'first'),
+                                            dest_lng = ('lng', 'last'))
     
-    od_aggregated['integrity_speed'] = False
+    seq_aggregated['integrity_speed'] = False
     
     # remove sequentially blocks of points that do not meet the integrity speed
     
-    while ~(od_aggregated['integrity_speed'].all()):
-        od_aggregated['prev_dest_lat'] = od_aggregated['dest_lat'].shift(1)
-        od_aggregated['prev_dest_lng'] = od_aggregated['dest_lng'].shift(1)
+    while ~(seq_aggregated['integrity_speed'].all()):
+        seq_aggregated['prev_dest_lat'] = seq_aggregated['dest_lat'].shift(1)
+        seq_aggregated['prev_dest_lng'] = seq_aggregated['dest_lng'].shift(1)
         
-        od_aggregated['distance_from_previous_trip'] = od_aggregated.apply(lambda r: haversine.haversine((r['depart_lat'], r['depart_lng']),
-                                                                                                         (r['prev_dest_lat'], r['prev_dest_lng'])), axis=1)
+        seq_aggregated['distance_from_previous_seq'] = seq_aggregated.apply(lambda r: haversine.haversine((r['depart_lat'], r['depart_lng']),
+                                                                                                          (r['prev_dest_lat'], r['prev_dest_lng'])), axis=1)
         
-        od_aggregated['time_from_previous_trip'] = od_aggregated['depart_time'] - od_aggregated['dest_time'].shift(1)
+        seq_aggregated['time_from_previous_seq'] = seq_aggregated['depart_time'] - seq_aggregated['dest_time'].shift(1)
         
-        od_aggregated['speed_from_previous_trip'] = (od_aggregated['distance_from_previous_trip'] / od_aggregated['time_from_previous_trip'] * 3600).fillna(0)
-        od_aggregated['integrity_speed'] = od_aggregated['speed_from_previous_trip'] < integrity_speed
+        seq_aggregated['speed_from_previous_seq'] = (seq_aggregated['distance_from_previous_seq'] / seq_aggregated['time_from_previous_seq'] * 3600).fillna(0)
+        seq_aggregated['integrity_speed'] = seq_aggregated['speed_from_previous_seq'] < integrity_speed
         
-        problematic_od = od_aggregated[~od_aggregated['integrity_speed']].index
+        problematic_od = seq_aggregated[~seq_aggregated['integrity_speed']].index
         
         if len(problematic_od) > 0:
-            od_aggregated.drop(problematic_od[0], inplace = True)
+            seq_aggregated.drop(problematic_od[0], inplace = True)
         
-    return od_aggregated.index
+    return seq_aggregated.index
     
 def trip_detection(df, integrity_speed = 250, 
                        integrity_space = 100,
@@ -282,7 +282,8 @@ def trip_detection(df, integrity_speed = 250,
         trip_df['consider_trip_pings'] = trip_df['pings_in_traj'] > min_pings_in_trip
         trip_df = trip_df[trip_df['consider_trip_pings']].copy(deep = True)
     
-    trip_df_wattr = trip_df.set_index('trip_id').loc[clean_od(trip_df)].reset_index()
+    integ_trips = sequence_integrity(trip_df, index = 'trip_id', integrity_speed = integrity_speed)
+    trip_df_wattr = trip_df.set_index('trip_id').loc[integ_trips].reset_index()
     
     trip_df_wattr['next_lat'] = trip_df_wattr['lat'].shift(-1)
     trip_df_wattr['next_lng'] = trip_df_wattr['lng'].shift(-1)
@@ -302,13 +303,31 @@ def trip_detection(df, integrity_speed = 250,
     
     return trip_detection(trip_res, integrity_speed = integrity_speed, integrity_space = integrity_space, integrity_time = integrity_time, return_one_exec = True)
 
-def cluster_stops(stop_df):
+def cluster_stops(stop_df, method = 'radius', radius = 0.150):
     """
     Helper function to cluster stops.
-    """
-    return stop_df
     
-def location_ranking(stop_df, timezone, start_window = '19:00', end_window = '07:00', method = 'most_frequent', radius = None):
+    Args:
+        stop_df (pandas.DataFrame): DataFrame containing stop data.
+        method (str, optional): Method for clustering stops. Options are 'radius'. Defaults to 'radius'.
+        radius (float, optional): Radius in kilometers to cluster stops. Defaults to 0.150.
+    """
+    
+    stops = stop_df.copy(deep = True)
+    
+    if method == 'radius':
+        points = stops.apply(lambda r: shapely.geometry.Point(r['mean_lng'], r['mean_lat']), axis=1)
+        stops = geopandas.GeoDataFrame(stops, geometry = points, crs = 'EPSG:4326')
+        
+        stop_clusters = stops.to_crs(UNIVERSAL_CRS).buffer(radius).to_crs('EPSG:4326').reset_index(name = 'geometry')\
+                                .dissolve().reset_index()[['geometry']].explode(index_parts = False).reset_index(drop = True)
+        stops = stops.sjoin(stop_clusters, how = 'left', predicate = 'within').rename(columns = {'index_right' : 'cluster_id'})
+        stops = stops.set_index('cluster_id').drop(['mean_lat', 'mean_lng'], axis = 1)\
+                        .join(stops.groupby('cluster_id').agg({'mean_lat' : 'mean', 'mean_lng' : 'mean'})).reset_index()
+                        
+    return stops
+    
+def location_ranking(stop_df, timezone, start_window = '19:00', end_window = '07:00', method = 'most_frequent'):
     """
     Calculate the ranking of location based on stop data.
     The best approach would be to cluster the stops before ranking them.
@@ -320,9 +339,6 @@ def location_ranking(stop_df, timezone, start_window = '19:00', end_window = '07
         end_window (str, optional): End time of the window period. Defaults to '07:00'.
         method (str, optional): Method for ranking locations. 
                                 Options are 'most_frequent', 'most_certain', and 'longest'. Defaults to 'most_frequent'.
-        radius (float, optional): Radius for creating location cluster. 
-                                  Keep it low, since it joins stops based on overlapping areas from a radius. 
-                                  Defaults to None.
 
     Returns:
         pandas.DataFrame: DataFrame containing the ranking of locations based on the specified method.
@@ -334,19 +350,9 @@ def location_ranking(stop_df, timezone, start_window = '19:00', end_window = '07
                 - most_certain: Total number of pings in the location.
                 - longest: Sum of stop durations in the location.
     """
+    methods = ['most_frequent', 'most_certain', 'longest']
     
     stops = stop_df.dropna(subset = 'timestamp').sort_values(by='timestamp')
-
-    # I will make a proper clustering function later
-    if radius is not None:
-        points = stops.apply(lambda r: shapely.geometry.Point(r['mean_lng'], r['mean_lat']), axis=1)
-        stops = geopandas.GeoDataFrame(stops, geometry = points, crs = 'EPSG:4326')
-        
-        stop_clusters = stops.to_crs(UNIVERSAL_CRS).buffer(radius).to_crs('EPSG:4326').reset_index(name = 'geometry')\
-                             .dissolve().reset_index()[['geometry']].explode(index_parts = False).reset_index(drop = True)
-        stops = stops.sjoin(stop_clusters, how = 'left', predicate = 'within').rename(columns = {'index_right' : 'cluster_id'})
-        stops = stops.set_index('cluster_id').drop(['mean_lat', 'mean_lng'], axis = 1)\
-                     .join(stops.groupby('cluster_id').agg({'mean_lat' : 'mean', 'mean_lng' : 'mean'})).reset_index()
                      
     window_stops = stops['timestamp'].apply(lambda t: pandas.Timestamp(t, unit='s', tz=timezone))
     
@@ -361,7 +367,8 @@ def location_ranking(stop_df, timezone, start_window = '19:00', end_window = '07
                                 .agg(most_frequent  = ('traj_id', 'nunique'), 
                                      most_certain   = ('traj_id', 'count'), 
                                      longest        = ('delta_time', 'sum'))\
-                                .sort_values(by = method, ascending = False)\
+                                .sort_values(by = [method]+[x for x in methods if x != method], 
+                                             ascending = False)\
                                 .reset_index()
 
     return loc_ranking.reset_index(names = 'ranking')
