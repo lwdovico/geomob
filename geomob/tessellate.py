@@ -11,7 +11,7 @@ from .preprocess import gpd_fromlist
 
 UNIVERSAL_CRS = 'EPSG:3857'
 
-def sq_tessellate(base_shape, meters, project_on_crs = None):
+def sq_tessellate(base_shape, meters, project_on_crs = None, within = False):
     """
     Function to tessellate a base shape into square polygons.
 
@@ -50,7 +50,12 @@ def sq_tessellate(base_shape, meters, project_on_crs = None):
             if shape.intersects(polygon):
                 polygons.append({"geometry": polygon})
 
-    return geopandas.GeoDataFrame(polygons, crs=project_on_crs).to_crs(base_shape.crs)
+    squared_tess = geopandas.GeoDataFrame(polygons, crs=project_on_crs).to_crs(base_shape.crs)
+    
+    if within:
+        squared_tess = squared_tess[squared_tess.within(shape)].reset_index(drop = True)
+        
+    return squared_tess
 
 def h3_tessellate(base_shape, resolution, within = False):
     """
@@ -77,8 +82,14 @@ def h3_tessellate(base_shape, resolution, within = False):
     for x in shape.geoms:
         
         if not within:
-            for lon, lat in x.boundary.coords:
-                h3_indexes.add(h3.geo_to_h3(lat, lon, resolution))
+            boundaries = x.boundary
+            
+            if isinstance(boundaries, shapely.geometry.LineString):
+                boundaries = shapely.geometry.MultiLineString([boundaries])
+                
+            for sub_line in boundaries.geoms:
+                for lon, lat in sub_line.coords:
+                    h3_indexes.add(h3.geo_to_h3(lat, lon, resolution))
             
         h3_indexes = h3_indexes.union(h3.polyfill_geojson(json.loads(shapely.to_geojson(x)), resolution))
         
