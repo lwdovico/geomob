@@ -2,5 +2,6 @@ from .preprocess import *
 from .retrieve import *
 from .tessellate import *
 from .plot import *
+from .routing import *
 
-__version__ = '0.0.4'
+__version__ = '0.0.5'
