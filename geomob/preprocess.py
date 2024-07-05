@@ -42,15 +42,15 @@ def gpd_fromlist(geometries, crs = 'EPSG:4326'):
     
     return gdf
 
-def trajectory_detection(df, stop_radius, stop_seconds, no_data_seconds):
+def trajectory_detection(df, stop_radius = 0.150, stop_seconds = 300, no_data_seconds = 36000):
     """
     Enrich the events of a user with trajectory stats based on a given set of stop parameters.
 
     Args:
-        llt_df (pandas.DataFrame): DataFrame containing lat, lng, and timestamp columns.
-        stop_radius (float): Radius in kilometers to define a stop.
-        stop_seconds (int): Minimum duration in seconds to consider a stop.
-        no_data_seconds (int): Maximum duration in seconds without data to consider it the same trajectory.
+        df (pandas.DataFrame): DataFrame containing lat, lng, and timestamp columns.
+        stop_radius (float): Radius in kilometers to define a stop. Defaults to 0.150 kilometers (150 meters).
+        stop_seconds (int): Minimum duration in seconds to consider a stop. Defaults to 300 seconds (5 minutes).
+        no_data_seconds (int): Maximum duration in seconds without data to consider it the same trajectory. Defaults to 36000 seconds (10 hours).
 
     Returns:
         pandas.DataFrame: DataFrame with additional columns: 
@@ -216,22 +216,26 @@ def stop_detection(df, max_speed = None):
                 - traj_id: Identifier of the trajectory.
                 - mean_lat: Mean latitude of the stop.
                 - mean_lng: Mean longitude of the stop.
-                - arrival_time: Timestamp of the first point of the stop.
-                - leaving_time: Timestamp of the next point after the stop.
-                - total_duration: Total duration in seconds of the stop.
+                - timestamp: Timestamp of the first point of the stop.
+                - end_timestamp: Timestamp of the next point after the stop.
+                - delta_time: Total duration in seconds of the stop.
                 - pings_in_stop: Number of points in the stop.
     """
     df = df.sort_values('timestamp').reset_index(drop=True)
+    
     stop_cols = ['traj_id', 'mean_lat', 'mean_lng', 
-                 'arrival_time', 'leaving_time', 'total_duration', 'pings_in_stop']
+                 'timestamp', 'end_timestamp', 
+                 'delta_time', 'pings_in_stop']
     
     df['consider_stop'] = df['is_stop']
     
     if max_speed is not None:
         df['consider_stop'] = df['consider_stop'] & (df['traj_max_speed'] < max_speed)
     
-    stop_df = df[df['consider_stop']].rename(columns = {'start_time' : 'arrival_time', 
-                                                        'end_time' : 'leaving_time',
+    stop_df = df[df['consider_stop']].drop(columns = ['timestamp', 'delta_time'])\
+                                     .rename(columns = {'start_time' : 'timestamp', 
+                                                        'end_time' : 'end_timestamp',
+                                                        'total_duration' : 'delta_time',
                                                         'pings_in_traj' : 'pings_in_stop'})[stop_cols]\
                                      .drop_duplicates()\
                                      .reset_index(drop = True)\
@@ -287,15 +291,17 @@ def location_ranking(stop_df, timezone, start_window = '19:00', end_window = '07
                 - longest: Sum of stop durations in the location.
     """
     methods = ['most_frequent', 'most_certain', 'longest']
+    ranking_columns = ['ranking', 'mean_lat', 'mean_lng'] + methods
     
     stops = stop_df.dropna(subset = 'timestamp').sort_values(by='timestamp')
                      
     window_stops = stops['timestamp'].apply(lambda t: pandas.Timestamp(t, unit='s', tz=timezone))
     
     if len(window_stops) == 0:
-        return pandas.DataFrame(columns = ['mean_lat', 'mean_lng', 'most_frequent', 'most_certain', 'longest'])
+        return pandas.DataFrame(columns = ranking_columns)
     
-    window_traj_id = stops.set_index(pandas.DatetimeIndex(window_stops)).between_time(start_window, end_window)['traj_id'].values
+    window_traj_id = stops.set_index(pandas.DatetimeIndex(window_stops))\
+                          .between_time(start_window, end_window)['traj_id'].values
         
     window_visits = stops[stops['traj_id'].isin(window_traj_id)]
     
@@ -311,26 +317,43 @@ def location_ranking(stop_df, timezone, start_window = '19:00', end_window = '07
 
 def trip_detection(df, integrity_speed = 250, 
                        integrity_space = 100,
-                       integrity_time = 60*60,
+                       integrity_time = 3600,
                        min_max_distance = None,
                        min_pings_in_trip = None,
                        return_one_exec = False):
     """
-    Detect trips in after the trajectory detection.
+    Detect trips after trajectory detection.
     
     Args:
         df (pandas.DataFrame): DataFrame containing trajectory data.
-        integrity_speed (float): Maximum speed threshold in km/h. Defaults to 250.
-        integrity_space (float): Maximum space threshold in km. Defaults to 100.
-        integrity_time (float): Maximum time threshold in seconds. Defaults to 1 hour (3600).
+        integrity_speed (float): Maximum speed threshold in km/h. Defaults to 250 km/h.
+        integrity_space (float): Maximum space threshold in km. Defaults to 100 km.
+        integrity_time (float): Maximum time threshold in seconds. Defaults to 3600 seconds (1 hour).
         min_max_distance (float, optional): Minimum distance threshold in km. Defaults to None.
         min_pings_in_trip (int, optional): Minimum number of pings in a trip. Defaults to None.
         return_one_exec (bool, optional): Return the result of the first execution. Defaults to False.
                                           The first execution returns segments of trajectories that are considered trips.
-                                          The second execution returns the final trips.
+                                          The second execution returns the final trips.               
+                                          
+    Returns:
+        pandas.DataFrame: DataFrame containing the trips' attributes.
+            Columns:
+                - trip_id: Identifier of the trip.
+                - traj_id: Identifier of the trajectory.
+                - lat: Latitude of the point.
+                - lng: Longitude of the point.
+                - timestamp: Timestamp of the point.
+                - delta_space: Distance in km between the current point and the next point.
+                - delta_time: Time difference in seconds between the current point and the next point.
+                - speed: Speed in km/h between the current point and the next point.
+                - pings_in_trip: Number of points in the trip.
         
     """
-    df = df[['traj_id', 'lat', 'lng', 'timestamp', 'delta_space', 'delta_time', 'speed', 'is_stop', 'pings_in_traj']].sort_values('timestamp').reset_index(drop=True)
+    trip_columns = ['traj_id', 'lat', 'lng', 'timestamp',  
+                    'delta_space', 'delta_time', 'speed', 
+                    'is_stop', 'pings_in_traj']
+    
+    df = df[trip_columns].sort_values('timestamp').reset_index(drop=True)
     
     df['break_point'] = (df['speed'] > integrity_speed) | (df['delta_space'] > integrity_space) | (df['delta_time'] > integrity_time)
     
@@ -361,14 +384,12 @@ def trip_detection(df, integrity_speed = 250,
     trip_df_wattr['next_timestamp'] = trip_df_wattr['timestamp'].shift(-1)
     trip_df_wattr['delta_time'] = trip_df_wattr['next_timestamp'] - trip_df_wattr['timestamp']
     trip_df_wattr['speed'] = trip_df_wattr['delta_space'] / trip_df_wattr['delta_time'] * 3600
-    trip_df_wattr['is_stop'] = False
+    trip_df_wattr['is_stop'] = False 
     
-    trip_cols = ['trip_id', 'traj_id', 'lat', 'lng', 'timestamp',  'delta_space', 'delta_time', 'speed', 'is_stop', 'pings_in_traj']
-    
-    trip_res = trip_df_wattr[trip_cols]
+    trip_res = trip_df_wattr[['trip_id']+trip_columns]
     
     if return_one_exec:
-        return trip_res
+        return trip_res.drop(columns = ['is_stop']).rename(columns = {'pings_in_traj' : 'pings_in_trip'})
     
     return trip_detection(trip_res, integrity_speed = integrity_speed, 
                                     integrity_space = integrity_space, 
@@ -378,15 +399,15 @@ def trip_detection(df, integrity_speed = 250,
                                     return_one_exec = True)
     
 def trip_compression(trip_df, return_geometry = False, list_speed = True):
-    aggregating_info = {'depart_time' : ('timestamp', 'first'),
-                        'dest_time' : ('timestamp', 'last'),
-                        'depart_lat' : ('lat', 'first'),
-                        'dest_lat' : ('lat', 'last'),
-                        'depart_lng' : ('lng', 'first'),
-                        'dest_lng' : ('lng', 'last'),
-                        'trip_points' : ('pings_in_traj', 'count'),
-                        'trip_duration' : ('delta_time', lambda x: int(x[:-1].sum())),
-                        'trip_distance' : ('delta_space', lambda x: x[:-1].sum())}
+    aggregating_info = {'timestamp' : ('timestamp', 'first'),
+                        'end_timestamp' : ('timestamp', 'last'),
+                        'lat' : ('lat', 'first'),
+                        'next_lat' : ('lat', 'last'),
+                        'lng' : ('lng', 'first'),
+                        'next_lng' : ('lng', 'last'),
+                        'pings_in_trip' : ('pings_in_trip', 'count'),
+                        'delta_time' : ('delta_time', lambda x: int(x[:-1].sum())),
+                        'delta_space' : ('delta_space', lambda x: x[:-1].sum())}
 
     if return_geometry:
         aggregating_info.update({'lat_sequence' : ('lat', list),
