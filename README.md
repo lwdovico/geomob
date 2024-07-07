@@ -8,15 +8,16 @@ Welcome to **GeoMob**, a lightweight library designed to facilitate working with
 
 1. **Preprocess Module**
    - Convert input GeoJSON formats into Shapely Geometries.
-   - A lightweight improved version of a stop detection algorithm (2004, Ramaswamy, H., Toyama, K.)
-   - An algorithm to detect, sanitize and compress (into an OD matrix) user's trips.
+   - A lightweight improved version of a stop detection algorithm (2004, Ramaswamy, H., Toyama, K.).
+   - A custom made algorithm to detect clean user's trips.
    - A location function to rank users locations during a time window based on different criterions.
+   - A function to compress (into an OD table) user's trips.
 
 2. **Tessellate Module**
    - Module to discretize the space of a shape.
-   - Support for many tessellation algorithms (e.g., Squared, H3, Voronoi, etc.)
+   - Support for many tessellation algorithms (e.g., Squared, S2, GeoHash, H3, Voronoi, etc.)
    - Function to simplify complex polygons into a complex of triangles
-   - Efficient function to compute a random set of points in a polygon (useful for synthetic data generation, to randomized Voronoi tessellation etc.)
+   - Efficient function to compute a random set of points in a polygon (useful for synthetic data generation, and for the randomized version of the Voronoi tessellation when points are not provided etc.)
 
 3. **Routing Module**
    - It supports only iGraph at the moment

@@ -16,14 +16,16 @@ classifiers = [
 ]
 dependencies = [
     "geopandas>=0.13.2",
-    "h3==3.7.7",
-    "haversine==2.8.1",
     "keplergl==0.3.2",
     "numpy>=1.23.5",
     "pandas>=2.0.3",
-    "Pytess==1.0.0",
     "requests>=2.31.0",
     "shapely>=2.0.0",
+    "haversine==2.8.1",
+    "h3==3.7.7",
+    "Pytess==1.0.0",
+    "s2cell==1.8.0",
+    "pygeohash==1.2.0"
 ]
 requires-python = ">= 3.8"
 

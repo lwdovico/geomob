@@ -306,7 +306,7 @@ def location_ranking(stop_df, timezone, start_window = '19:00', end_window = '07
     window_visits = stops[stops['traj_id'].isin(window_traj_id)]
     
     loc_ranking = window_visits .groupby(['mean_lat', 'mean_lng'])\
-                                .agg(most_frequent  = ('traj_id', 'nunique'), 
+                                .agg(most_frequent  = ('stop_id', 'nunique'), 
                                      most_certain   = ('traj_id', 'count'), 
                                      longest        = ('delta_time', 'sum'))\
                                 .sort_values(by = [method]+[x for x in methods if x != method], 
@@ -406,18 +406,14 @@ def trip_compression(trip_df, return_geometry = False, list_speed = True):
                         'lng' : ('lng', 'first'),
                         'next_lng' : ('lng', 'last'),
                         'pings_in_trip' : ('pings_in_trip', 'count'),
-                        'delta_time' : ('delta_time', lambda x: int(x[:-1].sum())),
+                        'delta_time' : ('delta_time', lambda x: x[:-1].sum()),
                         'delta_space' : ('delta_space', lambda x: x[:-1].sum())}
 
     if return_geometry:
         aggregating_info.update({'lat_sequence' : ('lat', list),
                                  'lng_sequence' : ('lng', list)})
     if list_speed:
-        aggregating_info.update({'speed_sequence' : ('speed', list)})
-    else:
-        aggregating_info.update({'max_speed' : ('speed', 'max'),
-                                 'mean_speed' : ('speed', 'mean'),
-                                 'min_speed' : ('speed', 'min')})
+        aggregating_info.update({'speed_sequence' : ('speed', lambda x: x[:-1].tolist())})
 
     compressed_trip = trip_df.groupby('trip_id').agg(**aggregating_info)
 
