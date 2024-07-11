@@ -33,5 +33,5 @@ def get_isochrones(points, max_weight, igraph_graph, graph_weights, concavity = 
                             'edge_geometry': isochrone_edges,
                             'geometry' : shapely.concave_hull(isochrone_edges, ratio = 1 - concavity)})
                 
-    return gpd.GeoDataFrame(isochrones, crs='EPSG:4326', geometry='geometry')
+    return geopandas.GeoDataFrame(isochrones, crs='EPSG:4326', geometry='geometry')
                 

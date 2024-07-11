@@ -243,14 +243,14 @@ def stop_detection(df, max_speed = None):
     
     return stop_df
     
-def cluster_stops(stop_df, method = 'radius', radius = 0.150):
+def cluster_stops(stop_df, method = 'radius', radius = 150):
     """
     Helper function to cluster stops.
     
     Args:
         stop_df (pandas.DataFrame): DataFrame containing stop data.
         method (str, optional): Method for clustering stops. Options are 'radius'. Defaults to 'radius'.
-        radius (float, optional): Radius in kilometers to cluster stops. Defaults to 0.150.
+        radius (float, optional): Radius in meters to cluster stops. Defaults to 150 meters.
     """
     
     stops = stop_df.copy(deep = True)
@@ -307,7 +307,7 @@ def location_ranking(stop_df, timezone, start_window = '19:00', end_window = '07
     
     loc_ranking = window_visits .groupby(['mean_lat', 'mean_lng'])\
                                 .agg(most_frequent  = ('stop_id', 'nunique'), 
-                                     most_certain   = ('traj_id', 'count'), 
+                                     most_certain   = ('pings_in_stop', 'sum'), 
                                      longest        = ('delta_time', 'sum'))\
                                 .sort_values(by = [method]+[x for x in methods if x != method], 
                                              ascending = False)\
