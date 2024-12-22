@@ -38,6 +38,14 @@ def gpd_fromlist(geometries, crs = 'EPSG:4326'):
         geopandas.GeoDataFrame: The GeoDataFrame created from the list of geometries.
     """
     
+    valid_geometries = (shapely.geometry.point.Point, 
+                        shapely.geometry.linestring.LineString, 
+                        shapely.geometry.polygon.Polygon)
+    
+    if type(geometries) is not list:
+        assert type(geometries) in valid_geometries, "Invalid geometry type."
+        geometries = [geometries]
+        
     gdf = geopandas.GeoDataFrame(geometry = geometries, crs = crs)
     
     return gdf
@@ -243,17 +251,25 @@ def stop_detection(df, max_speed = None):
     
     return stop_df
     
-def cluster_stops(stop_df, method = 'radius', radius = 150):
+def cluster_stops(stop_df, method = 'raw', radius = 150):
     """
     Helper function to cluster stops.
     
     Args:
         stop_df (pandas.DataFrame): DataFrame containing stop data.
-        method (str, optional): Method for clustering stops. Options are 'radius'. Defaults to 'radius'.
+        method (str, optional): Method for clustering stops. Options are 'raw' and 'radius'. Defaults to 'radius'.
         radius (float, optional): Radius in meters to cluster stops. Defaults to 150 meters.
     """
     
     stops = stop_df.copy(deep = True)
+    
+    if method == 'raw':
+        stops['loc_lng'] = numpy.round(stops['mean_lng'] * numpy.cos(numpy.radians(stops['mean_lat'])) * 111320 / radius, 0)
+        stops['loc_lat'] = numpy.round(stops['mean_lat'] * 111320 / radius, 0)
+        stops['cluster_id'] = stops['loc_lat'].astype(str) + '_' + stops['loc_lng'].astype(str)
+        
+        stops['mean_lat'] = stops['loc_lat'] * radius / 111320
+        stops['mean_lng'] = stops['loc_lng'] * radius / (111320 * numpy.cos(numpy.radians(stops['mean_lat'])))
     
     if method == 'radius':
         points = stops.apply(lambda r: shapely.geometry.Point(r['mean_lng'], r['mean_lat']), axis=1)
@@ -264,7 +280,7 @@ def cluster_stops(stop_df, method = 'radius', radius = 150):
         stops = stops.sjoin(stop_clusters, how = 'left', predicate = 'within').rename(columns = {'index_right' : 'cluster_id'})
         stops = stops.set_index('cluster_id').drop(['mean_lat', 'mean_lng'], axis = 1)\
                         .join(stops.groupby('cluster_id').agg({'mean_lat' : 'mean', 'mean_lng' : 'mean'})).reset_index()
-                        
+
     return stops
     
 def location_ranking(stop_df, timezone, start_window = '19:00', end_window = '07:00', method = 'most_frequent'):
