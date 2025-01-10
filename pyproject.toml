@@ -7,7 +7,7 @@ name = "geomob"
 dynamic = ["version"]
 description = "Geospatial and mobility data library"
 readme = "README.md"
-license = ""
+license = "MIT"
 authors = [
     { name = "Ludovico Lemma", email = "lwdovico@protonmail.com" },
 ]
