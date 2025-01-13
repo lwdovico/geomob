@@ -268,8 +268,9 @@ def cluster_stops(stop_df, method = 'raw', radius = 150):
         stops['loc_lat'] = numpy.round(stops['mean_lat'] * 111320 / radius, 0)
         stops['cluster_id'] = stops['loc_lat'].astype(str) + '_' + stops['loc_lng'].astype(str)
         
-        stops['mean_lat'] = stops['loc_lat'] * radius / 111320
-        stops['mean_lng'] = stops['loc_lng'] * radius / (111320 * numpy.cos(numpy.radians(stops['mean_lat'])))
+        stop_clusters = stops.groupby('cluster_id').agg({'mean_lat' : 'mean', 'mean_lng' : 'mean'})
+        stops['mean_lat'] = stops['cluster_id'].map(stop_clusters['mean_lat'].to_dict())
+        stops['mean_lng'] = stops['cluster_id'].map(stop_clusters['mean_lng'].to_dict())
     
     if method == 'radius':
         points = stops.apply(lambda r: shapely.geometry.Point(r['mean_lng'], r['mean_lat']), axis=1)
