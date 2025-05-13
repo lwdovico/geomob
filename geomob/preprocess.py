@@ -116,7 +116,7 @@ def trajectory_detection(df, stop_radius = 0.150, stop_seconds = 300, no_data_se
         lat_stop, lng_stop, t_stop = latlngt[traj_ids[-1]]
         
         if (t - t_stop) > no_data_seconds:
-            traj_ids.extend(range(traj_ids[-1] + 1, traj_ids[-1]  + waiting_time + 1))
+            traj_ids.extend(range(i - waiting_time + 1, i + 1))
             waiting_time = 1
             continue
         
@@ -131,7 +131,7 @@ def trajectory_detection(df, stop_radius = 0.150, stop_seconds = 300, no_data_se
             waiting_time += 1
         
         else:
-            traj_ids.extend(range(traj_ids[-1] + 1, traj_ids[-1] + waiting_time + 1))
+            traj_ids.extend(range(i - waiting_time + 1, i + 1))
             waiting_time = 1
             
     traj_ids.extend([traj_ids[-1]]*(waiting_time - 1))
