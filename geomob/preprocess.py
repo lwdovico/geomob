@@ -42,8 +42,8 @@ def gpd_fromlist(geometries, crs = 'EPSG:4326'):
                         shapely.geometry.linestring.LineString, 
                         shapely.geometry.polygon.Polygon)
     
-    if type(geometries) is not list:
-        assert type(geometries) in valid_geometries, "Invalid geometry type."
+    # Check if `geometries` is a single geometry
+    if isinstance(geometries, valid_geometries):
         geometries = [geometries]
         
     gdf = geopandas.GeoDataFrame(geometry = geometries, crs = crs)
